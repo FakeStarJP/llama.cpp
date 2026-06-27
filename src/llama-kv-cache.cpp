@@ -4,6 +4,7 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-kv-pipeline.h"
 
 #include <algorithm>
 #include <cassert>
@@ -1103,7 +1104,10 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
     return res;
 }
 
-void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
+void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch,
+                                  const void * sel_plan_raw) {
+    // Cast the opaque pointer to the selection plan type.
+    const auto * sel_plan = static_cast<const ikv_selection_plan *>(sel_plan_raw);
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
     if (other) {
         return;
@@ -1123,8 +1127,20 @@ void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & 
             const uint32_t i = s*sinfo.size() + ii;
 
             auto & cells = v_cells[sinfo.strm[s]];
-
             const auto idx = sinfo.idxs[s][ii];
+
+            // Selection stage: skip tokens marked as dropped (cell_indices[i] == -1).
+            // The cell is cleared so that subsequent tokens do not see stale data.
+            if (sel_plan && sel_plan->ok && i < sel_plan->cell_indices.size()
+                && sel_plan->cell_indices[i] == -1) {
+                if (!cells.is_empty(idx)) {
+                    const llama_seq_id seq_id = cells.seq_get(idx);
+                    const llama_pos    pos    = cells.pos_get(idx);
+                    seq_pos_max_rm[seq_id] = std::max(seq_pos_max_rm[seq_id], pos);
+                    cells.rm(idx);
+                }
+                continue;
+            }
 
             if (!cells.is_empty(idx)) {
                 assert(cells.seq_count(idx) == 1);
@@ -1200,6 +1216,14 @@ uint32_t llama_kv_cache::get_size() const {
 
 uint32_t llama_kv_cache::get_n_stream() const {
     return n_stream;
+}
+
+uint32_t llama_kv_cache::get_used_cells() const {
+    uint32_t used = 0;
+    for (uint32_t s = 0; s < n_stream; ++s) {
+        used += v_cells[s].get_used();
+    }
+    return used;
 }
 
 bool llama_kv_cache::get_has_shift() const {
@@ -2543,7 +2567,7 @@ bool llama_kv_cache_context::apply() {
         return true;
     }
 
-    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
+    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur], m_selection_plan);
     n_kv = kv->get_n_kv(sinfos[i_cur]);
 
     return true;
@@ -2626,6 +2650,55 @@ void llama_kv_cache_context::set_input_pos_bucket(ggml_tensor * dst, const llama
 void llama_kv_cache_context::set_input_k_rot(ggml_tensor * dst) const {
     kv->set_input_k_rot(dst);
 }
+
+//
+// C API helpers for KV cache statistics (declared in llama.h)
+//
+// These are defined here because llama.cpp's C API is implemented across
+// multiple translation units. The functions cast the context's memory to
+// llama_kv_cache and return statistics. If the memory is not a KV cache
+// (e.g. a non-KV memory type), they return 0.
+//
+// When a pipeline is attached, get_memory() returns the ikv_pipeline
+// wrapper — not the underlying llama_kv_cache. The pipeline exposes its
+// upstream via upstream(), so we still reach the KV cache through it.
+//
+
+extern "C" {
+
+// Helper: resolve llama_kv_cache* from a llama_context.
+// Returns nullptr if the context has no KV cache or if it cannot be reached.
+static llama_kv_cache * resolve_kv_cache(const struct llama_context * ctx) {
+    if (!ctx) return nullptr;
+    auto * mem = ctx->get_memory();
+    if (!mem) return nullptr;
+    // Direct case: no pipeline attached.
+    if (auto * kv = dynamic_cast<llama_kv_cache *>(mem)) {
+        return kv;
+    }
+    // Pipeline case: try to reach upstream through ikv_pipeline.
+    // llama-kv-pipeline.h is included at the top of this file.
+    if (auto * pipe = dynamic_cast<ikv_pipeline *>(mem)) {
+        if (auto * upstream = pipe->upstream()) {
+            if (auto * kv = dynamic_cast<llama_kv_cache *>(upstream)) {
+                return kv;
+            }
+        }
+    }
+    return nullptr;
+}
+
+uint32_t llama_kv_cache_get_size(const struct llama_context * ctx) {
+    auto * kv = resolve_kv_cache(ctx);
+    return kv ? kv->get_size() : 0;
+}
+
+uint32_t llama_kv_cache_get_used(const struct llama_context * ctx) {
+    auto * kv = resolve_kv_cache(ctx);
+    return kv ? kv->get_used_cells() : 0;
+}
+
+} // extern "C"
 
 void llama_kv_cache_context::set_input_v_rot(ggml_tensor * dst) const {
     kv->set_input_v_rot(dst);

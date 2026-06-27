@@ -330,7 +330,7 @@ llama_context::llama_context(
             /*.mem_other =*/ llama_get_memory(cparams.ctx_other),
         };
 
-        memory.reset(model.create_memory(params_mem, cparams));
+        m_upstream.reset(model.create_memory(params_mem, cparams));
     }
 
     // init backends
@@ -462,9 +462,9 @@ void llama_context::sched_reserve() {
     sched.reset(ggml_backend_sched_new(backend_ptrs.data(), backend_buft.data(), backend_ptrs.size(), max_nodes, cparams.pipeline_parallel, cparams.op_offload));
 
     llama_memory_context_ptr mctx;
-    if (memory) {
+    if (m_upstream) {
         LLAMA_LOG_DEBUG("%s: reserving full memory module\n", __func__);
-        mctx = memory->init_full();
+        mctx = m_upstream->init_full();
         if (!mctx) {
             throw std::runtime_error("failed to initialize memory module");
         }
@@ -756,16 +756,26 @@ uint32_t llama_context::n_threads_batch() const {
 }
 
 llama_memory_t llama_context::get_memory() const {
-    return memory.get();
+    if (m_kv_pipeline) {
+        return m_kv_pipeline.get();
+    }
+    return m_upstream.get();
+}
+
+void llama_context::apply_kv_pipeline(ikv_pipeline_ptr pipeline) {
+    if (pipeline) {
+        pipeline->set_upstream(m_upstream.get());
+    }
+    m_kv_pipeline = std::move(pipeline);
 }
 
 bool llama_context::memory_update(bool optimize) {
-    if (!memory) {
+    if (!m_upstream) {
         return false;
     }
 
     {
-        const auto mctx = memory->init_update(this, optimize);
+        const auto mctx = m_upstream->init_update(this, optimize);
         switch (mctx->get_status()) {
             case LLAMA_MEMORY_STATUS_SUCCESS:
                 {
@@ -796,7 +806,7 @@ bool llama_context::memory_update(bool optimize) {
 
     // if the memory module did any computation, we have to reserve a new worst-case graph
     {
-        const auto mctx = memory->init_full();
+        const auto mctx = m_upstream->init_full();
         if (!mctx) {
             throw std::runtime_error("failed to initialize memory context");
         }
@@ -1330,7 +1340,27 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
-        ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+
+        // パイプラインが eval callback を提供する場合、ユーザー callback とチェインする
+        if (m_kv_pipeline && m_kv_pipeline->get_eval_callback()) {
+            m_chain_eval.pipe_cb = m_kv_pipeline->get_eval_callback();
+            m_chain_eval.pipe_ud = m_kv_pipeline->get_eval_callback_user_data();
+            m_chain_eval.user_cb = cparams.cb_eval;
+            m_chain_eval.user_ud = cparams.cb_eval_user_data;
+
+            ggml_backend_sched_set_eval_callback(sched.get(),
+                // チェインコールバック: pipeline → user の順で呼ぶ
+                [](ggml_tensor * t, bool ask, void * ud) -> bool {
+                    auto & d = *static_cast<chain_eval_data *>(ud);
+                    bool ok = true;
+                    if (d.pipe_cb) { ok = d.pipe_cb(t, ask, d.pipe_ud) && ok; }
+                    if (d.user_cb) { ok = d.user_cb(t, ask, d.user_ud) && ok; }
+                    return ok;
+                },
+                &m_chain_eval);
+        } else {
+            ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        }
 
         //const auto t_start_us = ggml_time_us();
 
@@ -1682,7 +1712,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
     // so accept either present rather than requiring exactly one.
     GGML_ASSERT(batch_inp.token || batch_inp.embd);
 
-    if (!memory) {
+    if (!m_upstream) {
         LLAMA_LOG_DEBUG("%s: cannot decode batches with this context (calling encode() instead)\n", __func__);
         return encode(batch_inp);
     }
@@ -1728,7 +1758,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
         }
     }
 
-    if (!balloc->init(batch_inp, vocab, memory.get(), n_embd, n_seq_max, output_all)) {
+    if (!balloc->init(batch_inp, vocab, m_upstream.get(), n_embd, n_seq_max, output_all)) {
         LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
         return -1;
     }
@@ -1768,7 +1798,10 @@ int llama_context::decode(const llama_batch & batch_inp) {
     llama_memory_context_ptr mctx;
 
     while (true) {
-        mctx = memory->init_batch(*balloc, cparams.n_ubatch, output_all);
+        // Use get_memory() so that any attached KV pipeline (which wraps
+        // m_upstream) gets a chance to inject selection/compression hooks.
+        const auto & mem = get_memory();
+        mctx = mem->init_batch(*balloc, cparams.n_ubatch, output_all);
         if (!mctx) {
             return -2;
         }
@@ -1862,7 +1895,7 @@ int llama_context::decode(const llama_batch & batch_inp) {
 
                 LLAMA_LOG_WARN("%s: removing memory module entries for seq_id = %d, pos = [%d, +inf)\n", __func__, s, pos_min[s]);
 
-                memory->seq_rm(s, pos_min[s], -1);
+                m_upstream->seq_rm(s, pos_min[s], -1);
             }
 
             switch (status) {
@@ -3117,9 +3150,9 @@ size_t llama_context::state_write_data(llama_io_write_i & io) {
         // TODO: add more model-specific info which should prevent loading the session file if not identical
     }
 
-    if (memory != nullptr) {
+    if (m_upstream != nullptr) {
         LLAMA_LOG_DEBUG("%s: - writing memory module\n", __func__);
-        memory->state_write(io);
+        m_upstream->state_write(io);
     }
 
     return io.n_bytes();
@@ -3142,10 +3175,10 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
         // TODO: add more info which needs to be identical but which is not verified otherwise
     }
 
-    if (memory) {
+    if (m_upstream) {
         LLAMA_LOG_DEBUG("%s: - reading memory module\n", __func__);
 
-        memory->state_read(io);
+        m_upstream->state_read(io);
     }
 
     return io.n_bytes();
@@ -3154,8 +3187,8 @@ size_t llama_context::state_read_data(llama_io_read_i & io) {
 size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     GGML_UNUSED(seq_id);
 
-    if (memory) {
-        memory->state_write(io, seq_id, flags);
+    if (m_upstream) {
+        m_upstream->state_write(io, seq_id, flags);
     }
 
     return io.n_bytes();
@@ -3164,8 +3197,8 @@ size_t llama_context::state_seq_write_data(llama_io_write_i & io, llama_seq_id s
 size_t llama_context::state_seq_read_data(llama_io_read_i & io, llama_seq_id seq_id, llama_state_seq_flags flags) {
     GGML_UNUSED(seq_id);
 
-    if (memory) {
-        memory->state_read(io, seq_id, flags);
+    if (m_upstream) {
+        m_upstream->state_read(io, seq_id, flags);
     }
 
     return io.n_bytes();
@@ -3201,8 +3234,8 @@ llama_memory_breakdown llama_context::memory_breakdown() const {
     for (const auto & [buft, size] : model.memory_breakdown()) {
         ret[buft].model += size;
     }
-    if (memory) {
-        for (const auto & [buft, size] : memory->memory_breakdown()) {
+    if (m_upstream) {
+        for (const auto & [buft, size] : m_upstream->memory_breakdown()) {
             ret[buft].context += size;
         }
     }
@@ -3299,7 +3332,7 @@ void llama_context::opt_epoch_iter(
     const uint32_t n_batch  = std::min(this->n_batch(),  n_ctx);
     const uint32_t n_ubatch = std::min(this->n_ubatch(), n_batch);
 
-    memory->clear(true);
+    m_upstream->clear(true);
 
     for (uint32_t pos_ctx = 0; pos_ctx < n_ctx; pos_ctx += n_batch) {
         batch.n_tokens = n_batch;
@@ -3324,7 +3357,7 @@ void llama_context::opt_epoch_iter(
 
         uint32_t n_outputs_all = n_tokens_all;
 
-        auto mctx = memory->init_batch(*balloc, cparams.n_ubatch, true);
+        auto mctx = m_upstream->init_batch(*balloc, cparams.n_ubatch, true);
         if (!mctx || mctx->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
             LLAMA_LOG_ERROR("%s: could not initialize batch\n", __func__);
             break;

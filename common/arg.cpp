@@ -2158,6 +2158,34 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_CACHE_TYPE_V"));
     add_opt(common_arg(
+        {"--kv-selection"}, "NAME",
+        "KV selection pipeline (e.g. snapkv, baseline)",
+        [](common_params & params, const std::string & value) {
+            params.kv_selection = value;
+        }
+    ).set_env("LLAMA_ARG_KV_SELECTION"));
+    add_opt(common_arg(
+        {"--kv-compression"}, "NAME",
+        "KV compression pipeline (e.g. kvtc)",
+        [](common_params & params, const std::string & value) {
+            params.kv_compression = value;
+        }
+    ).set_env("LLAMA_ARG_KV_COMPRESSION"));
+    add_opt(common_arg(
+        {"--kv-selection-plugin"}, "PATH",
+        "Path to dynamic KV selection plugin (.so/.dll)",
+        [](common_params & params, const std::string & value) {
+            params.kv_selection_plugin = value;
+        }
+    ).set_env("LLAMA_ARG_KV_SELECTION_PLUGIN"));
+    add_opt(common_arg(
+        {"--kv-compression-plugin"}, "PATH",
+        "Path to dynamic KV compression plugin (.so/.dll)",
+        [](common_params & params, const std::string & value) {
+            params.kv_compression_plugin = value;
+        }
+    ).set_env("LLAMA_ARG_KV_COMPRESSION_PLUGIN"));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {

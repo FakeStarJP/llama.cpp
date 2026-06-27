@@ -7,6 +7,7 @@
 #include "llama-adapter.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
+#include "llama-kv-pipeline.h"
 
 #include "ggml-cpp.h"
 #include "ggml-opt.h"
@@ -72,6 +73,11 @@ struct llama_context {
     uint32_t n_threads_batch() const;
 
     llama_memory_t get_memory() const;
+
+    // Attach a KV pipeline. The pipeline wraps m_upstream and becomes
+    // the new effective memory for the context. Passing nullptr detaches
+    // any existing pipeline (reverts to m_upstream).
+    void apply_kv_pipeline(ikv_pipeline_ptr pipeline);
 
     // return true if the memory was updated
     bool memory_update(bool optimize);
@@ -282,7 +288,8 @@ private:
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
-    llama_memory_ptr memory;
+    llama_memory_ptr m_upstream; // underlying KV cache / memory
+    ikv_pipeline_ptr m_kv_pipeline; // optional pipeline that wraps m_upstream
 
     // decode output (2-dimensional array: [n_outputs][n_vocab])
     buffer_view<float> logits = {nullptr, 0};
@@ -373,6 +380,15 @@ private:
 
     // env: LLAMA_GRAPH_REUSE_DISABLE
     bool graph_reuse_disable = false;
+
+    // eval callback チェーン用の一時データ（pipeline + user callback の両方を呼ぶため）
+    struct chain_eval_data {
+        ggml_backend_sched_eval_callback pipe_cb = nullptr;
+        void * pipe_ud = nullptr;
+        ggml_backend_sched_eval_callback user_cb = nullptr;
+        void * user_ud = nullptr;
+    };
+    chain_eval_data m_chain_eval;
 
     // perf
     mutable int64_t t_start_us  = 0;

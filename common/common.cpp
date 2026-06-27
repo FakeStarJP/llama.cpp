@@ -6,6 +6,7 @@
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
+#include "llama-kv-pipeline.h"
 #include "sampling.h"
 #include "speculative.h"
 #include "unicode.h"
@@ -1296,6 +1297,35 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     pimpl->context.reset(lctx);
+
+    // KV パイプラインの適用（コンテキスト作成直後、推論開始前）
+    if (!params.kv_selection_plugin.empty()) {
+        int rc = llama_kv_pipeline_apply_dynamic(lctx, params.kv_selection_plugin.c_str(), nullptr);
+        if (rc != 0) {
+            LOG_WRN("%s: failed to load KV selection plugin '%s' (rc=%d)\n",
+                    __func__, params.kv_selection_plugin.c_str(), rc);
+        }
+    } else if (!params.kv_selection.empty()) {
+        int rc = llama_kv_pipeline_apply(lctx, params.kv_selection.c_str(), nullptr);
+        if (rc != 0) {
+            LOG_WRN("%s: failed to apply KV selection '%s' (rc=%d)\n",
+                    __func__, params.kv_selection.c_str(), rc);
+        }
+    }
+
+    if (!params.kv_compression_plugin.empty()) {
+        int rc = llama_kv_pipeline_apply_dynamic(lctx, params.kv_compression_plugin.c_str(), nullptr);
+        if (rc != 0) {
+            LOG_WRN("%s: failed to load KV compression plugin '%s' (rc=%d)\n",
+                    __func__, params.kv_compression_plugin.c_str(), rc);
+        }
+    } else if (!params.kv_compression.empty()) {
+        int rc = llama_kv_pipeline_apply(lctx, params.kv_compression.c_str(), nullptr);
+        if (rc != 0) {
+            LOG_WRN("%s: failed to apply KV compression '%s' (rc=%d)\n",
+                    __func__, params.kv_compression.c_str(), rc);
+        }
+    }
 }
 
 llama_model * common_init_result::model() {

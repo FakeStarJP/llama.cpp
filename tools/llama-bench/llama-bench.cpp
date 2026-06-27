@@ -26,6 +26,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "llama-kv-pipeline.h"
 
 #ifdef _WIN32
 #    define WIN32_LEAN_AND_MEAN
@@ -361,6 +362,10 @@ struct cmd_params {
     bool                             no_warmup;
     output_formats                   output_format;
     output_formats                   output_format_stderr;
+    std::string                      kv_selection;
+    std::string                      kv_compression;
+    std::string                      kv_selection_plugin;
+    std::string                      kv_compression_plugin;
 };
 
 static const cmd_params cmd_params_defaults = {
@@ -406,6 +411,10 @@ static const cmd_params cmd_params_defaults = {
     /* no_warmup            */ false,
     /* output_format        */ MARKDOWN,
     /* output_format_stderr */ NONE,
+    /* kv_selection         */ "",
+    /* kv_compression       */ "",
+    /* kv_selection_plugin  */ "",
+    /* kv_compression_plugin*/ "",
 };
 
 static void print_usage(int /* argc */, char ** argv) {
@@ -418,6 +427,10 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --prio <-1|0|1|2|3>                         process/thread priority (default: %d)\n", cmd_params_defaults.prio);
     printf("  --delay <0...N> (seconds)                   delay between each test (default: %d)\n", cmd_params_defaults.delay);
     printf("  -o, --output <csv|json|jsonl|md|sql>        output format printed to stdout (default: %s)\n", output_format_str(cmd_params_defaults.output_format));
+    printf("  --kv-selection <name>                     KV selection pipeline name (e.g. snapkv)\n");
+    printf("  --kv-compression <name>                   KV compression pipeline name (e.g. kvtc)\n");
+    printf("  --kv-selection-plugin <path>               Path to dynamic KV selection plugin (.so/.dll)\n");
+    printf("  --kv-compression-plugin <path>             Path to dynamic KV compression plugin (.so/.dll)\n");
     printf("  -oe, --output-err <csv|json|jsonl|md|sql>   output format printed to stderr (default: %s)\n", output_format_str(cmd_params_defaults.output_format_stderr));
     printf("  --list-devices                              list available devices and exit\n");
     printf("  -v, --verbose                               verbose output\n");
@@ -998,6 +1011,30 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "--kv-selection") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.kv_selection = argv[i];
+            } else if (arg == "--kv-compression") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.kv_compression = argv[i];
+            } else if (arg == "--kv-selection-plugin") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.kv_selection_plugin = argv[i];
+            } else if (arg == "--kv-compression-plugin") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                params.kv_compression_plugin = argv[i];
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1442,6 +1479,8 @@ struct test {
     int                      n_gen;
     int                      n_depth;
     std::string              test_time;
+    uint32_t                 kv_cells_total;
+    uint32_t                 kv_cells_used;
     std::vector<uint64_t>    samples_ns;
 
     test(const cmd_params_instance & inst, const llama_model * lmodel, const llama_context * ctx) :
@@ -1486,7 +1525,14 @@ struct test {
         std::strftime(buf, sizeof(buf), "%FT%TZ", gmtime(&t));
         test_time = buf;
 
-        (void) ctx;
+        // KV cache statistics (populated by the caller after the test run
+        // if ctx is non-null; otherwise left at 0).
+        kv_cells_total = 0;
+        kv_cells_used  = 0;
+        if (ctx) {
+            kv_cells_total = llama_kv_cache_get_size(ctx);
+            kv_cells_used  = llama_kv_cache_get_used(ctx);
+        }
     }
 
     uint64_t avg_ns() const { return ::avg(samples_ns); }
@@ -1537,7 +1583,8 @@ struct test {
             "tensor_buft_overrides",            "use_mmap",      "use_direct_io",  "embeddings",
             "no_op_offload",  "no_host",        "fit_target",     "fit_min_ctx",
             "n_prompt",       "n_gen",          "n_depth",
-            "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts"
+            "test_time",      "avg_ns",         "stddev_ns",     "avg_ts",         "stddev_ts",
+            "kv_cells_total", "kv_cells_used"
         };
         return fields;
     }
@@ -1549,7 +1596,8 @@ struct test {
             field == "poll" || field == "model_size" || field == "model_n_params" || field == "n_gpu_layers" ||
             field == "main_gpu" || field == "n_prompt" || field == "n_gen" || field == "n_depth" || field == "avg_ns" ||
             field == "stddev_ns" || field == "no_op_offload" || field == "n_cpu_moe" ||
-            field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn") {
+            field == "fit_target" || field == "fit_min_ctx" || field == "flash_attn" ||
+            field == "kv_cells_total" || field == "kv_cells_used") {
             return INT;
         }
         if (field == "f16_kv" || field == "no_kv_offload" || field == "cpu_strict" ||
@@ -1639,7 +1687,9 @@ struct test {
                                             std::to_string(avg_ns()),
                                             std::to_string(stdev_ns()),
                                             std::to_string(avg_ts()),
-                                            std::to_string(stdev_ts()) };
+                                            std::to_string(stdev_ts()),
+                                            std::to_string(kv_cells_total),
+                                            std::to_string(kv_cells_used) };
         return values;
     }
 
@@ -1881,6 +1931,12 @@ struct markdown_printer : public printer {
         if (field == "fit_min_ctx") {
             return "fitc";
         }
+        if (field == "kv_cells_total") {
+            return "kv_total";
+        }
+        if (field == "kv_cells_used") {
+            return "kv_used";
+        }
         return field;
     }
 
@@ -1965,6 +2021,8 @@ struct markdown_printer : public printer {
         if (params.fit_params_min_ctx.size() > 1 || params.fit_params_min_ctx != cmd_params_defaults.fit_params_min_ctx) {
             fields.emplace_back("fit_min_ctx");
         }
+        fields.emplace_back("kv_cells_total");
+        fields.emplace_back("kv_cells_used");
         fields.emplace_back("test");
         fields.emplace_back("t/s");
 
@@ -2021,6 +2079,12 @@ struct markdown_printer : public printer {
                 value = buf;
             } else if (field == "t/s") {
                 snprintf(buf, sizeof(buf), "%.2f ± %.2f", t.avg_ts(), t.stdev_ts());
+                value = buf;
+            } else if (field == "kv_cells_total") {
+                snprintf(buf, sizeof(buf), "%" PRIu32, t.kv_cells_total);
+                value = buf;
+            } else if (field == "kv_cells_used") {
+                snprintf(buf, sizeof(buf), "%" PRIu32, t.kv_cells_used);
                 value = buf;
             } else if (vmap.find(field) != vmap.end()) {
                 value = vmap.at(field);
@@ -2294,6 +2358,45 @@ int llama_bench(int argc, char ** argv) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
             llama_model_free(lmodel);
             return 1;
+        }
+
+        // Apply KV pipeline if requested.
+        if (!params.kv_selection.empty() || !params.kv_compression.empty()) {
+            std::string pipeline_name;
+            if (!params.kv_selection.empty() && !params.kv_compression.empty()) {
+                pipeline_name = params.kv_selection + "+" + params.kv_compression;
+            } else if (!params.kv_selection.empty()) {
+                pipeline_name = params.kv_selection;
+            } else {
+                pipeline_name = params.kv_compression;
+            }
+            int rc = llama_kv_pipeline_apply(ctx, pipeline_name.c_str(), nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "%s: warning: failed to apply KV pipeline '%s' (rc=%d)\n",
+                        __func__, pipeline_name.c_str(), rc);
+            } else if (params.verbose) {
+                printf("applied KV pipeline: %s\n", pipeline_name.c_str());
+            }
+        }
+
+        // Apply dynamic KV plugins if requested.
+        if (!params.kv_selection_plugin.empty()) {
+            int rc = llama_kv_pipeline_apply_dynamic(ctx, params.kv_selection_plugin.c_str(), nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "%s: warning: failed to load KV selection plugin '%s' (rc=%d)\n",
+                        __func__, params.kv_selection_plugin.c_str(), rc);
+            } else if (params.verbose) {
+                printf("loaded KV selection plugin: %s\n", params.kv_selection_plugin.c_str());
+            }
+        }
+        if (!params.kv_compression_plugin.empty()) {
+            int rc = llama_kv_pipeline_apply_dynamic(ctx, params.kv_compression_plugin.c_str(), nullptr);
+            if (rc != 0) {
+                fprintf(stderr, "%s: warning: failed to load KV compression plugin '%s' (rc=%d)\n",
+                        __func__, params.kv_compression_plugin.c_str(), rc);
+            } else if (params.verbose) {
+                printf("loaded KV compression plugin: %s\n", params.kv_compression_plugin.c_str());
+            }
         }
 
         test t(inst, lmodel, ctx);

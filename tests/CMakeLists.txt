@@ -235,6 +235,35 @@ set_tests_properties(test-thread-safety PROPERTIES FIXTURES_REQUIRED test-downlo
 
 llama_build_and_test(test-arg-parser.cpp)
 
+# KV pipeline tests
+# These tests require a GGUF model. We use the VibeThinker-3B model which is
+# small enough to run on CPU quickly.
+if (EXISTS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+    llama_build(test-kv-pipeline.cpp)
+    llama_test(test-kv-pipeline NAME test-kv-pipeline-snapkv ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+
+    llama_build(test-kv-pipeline-regression.cpp)
+    llama_test(test-kv-pipeline-regression NAME test-kv-pipeline-regression ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+
+    llama_build(test-kv-pipeline-plugin.cpp)
+    llama_test(test-kv-pipeline-plugin NAME test-kv-pipeline-plugin ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+
+    llama_build(test-kv-pipeline-stress.cpp)
+    llama_test(test-kv-pipeline-stress NAME test-kv-pipeline-stress ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+
+    llama_build(test-kv-pipeline-thread.cpp)
+    llama_test(test-kv-pipeline-thread NAME test-kv-pipeline-thread ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+
+    llama_build(test-debug-abort.cpp)
+    llama_test(test-debug-abort NAME test-debug-abort ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+
+    llama_build(test-kv-pipeline-perf.cpp)
+    llama_test(test-kv-pipeline-perf NAME test-kv-pipeline-perf ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+
+    llama_build(test-kv-pipeline-backend-parity.cpp)
+    llama_test(test-kv-pipeline-backend-parity NAME test-kv-pipeline-backend-parity ARGS "${PROJECT_SOURCE_DIR}/models/VibeThinker-3B-heretic_decensored.i1-Q6_K.gguf")
+endif()
+
 if (NOT LLAMA_SANITIZE_ADDRESS AND NOT GGML_SCHED_NO_REALLOC)
   # TODO: repair known memory leaks
   llama_build_and_test(test-opt.cpp)

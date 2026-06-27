@@ -579,6 +579,12 @@ struct common_params {
     ggml_type cache_type_k = GGML_TYPE_F16; // KV cache data type for the K
     ggml_type cache_type_v = GGML_TYPE_F16; // KV cache data type for the V
 
+    // KV pipeline
+    std::string kv_selection;             // 組み込み選択パイプライン名（"snapkv", "baseline", 空=なし）
+    std::string kv_compression;           // 組み込み圧縮パイプライン名（"kvtc", 空=なし）
+    std::string kv_selection_plugin;      // 動的選択プラグインパス（.dll/.so）
+    std::string kv_compression_plugin;    // 動的圧縮プラグインパス（.dll/.so）
+
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
     // multimodal models (see tools/mtmd)

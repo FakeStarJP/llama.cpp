@@ -155,6 +155,7 @@ public:
 
     uint32_t get_size()     const;
     uint32_t get_n_stream() const;
+    uint32_t get_used_cells() const;
 
     bool get_has_shift() const;
 
@@ -191,7 +192,12 @@ public:
     slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
-    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
+    // If sel_plan is non-null, it points to an ikv_selection_plan where
+    // cell_indices[i] == -1 means the token is dropped (skipped).
+    // The remaining tokens are written to the cache, preserving their
+    // original cell assignments for the retained tokens.
+    void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch,
+                      const void * sel_plan = nullptr);
 
     //
     // input API
@@ -420,6 +426,14 @@ private:
     slot_info_vec_t sinfos;
 
     std::vector<llama_ubatch> ubatches;
+
+public:
+    // Opaque pointer to an ikv_selection_plan injected by the pipeline.
+    // nullptr = no selection. The pipeline sets this before calling apply()
+    // so that dropped tokens are skipped during KV cache writes.
+    const void * m_selection_plan = nullptr;
+
+private:
 
     //
     // data needed for building the compute graph for the current ubatch:

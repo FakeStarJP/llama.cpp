@@ -775,6 +775,21 @@ extern "C" {
     LLAMA_API bool llama_memory_can_shift(llama_memory_t mem);
 
     //
+    // KV cache statistics
+    //
+    // These functions return information about the underlying KV cache of a
+    // context. They are intended for benchmarking and telemetry. If the
+    // context's memory is not a llama_kv_cache (e.g. a pipeline wrapper or
+    // a non-KV memory type), the functions return 0.
+
+    // Return the total number of KV cells allocated for the context's KV cache.
+    LLAMA_API uint32_t llama_kv_cache_get_size(const struct llama_context * ctx);
+
+    // Return the number of KV cells currently in use (i.e. occupied by at
+    // least one sequence).
+    LLAMA_API uint32_t llama_kv_cache_get_used(const struct llama_context * ctx);
+
+    //
     // State / sessions
     //
 
