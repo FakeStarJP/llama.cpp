@@ -378,9 +378,29 @@ private:
 //
 class kvp_factory_kvtc : public ikv_pipeline_factory {
 public:
-    ikv_pipeline_ptr create() override {
-        // デフォルトマージ率: 0.5（保持トークンの 50% を隣接マージ）
-        return ikv_pipeline_ptr(new kvp_pipeline_kvtc(0.5f));
+    ikv_pipeline_ptr create(const char * config_json = nullptr) override {
+        float merge_rate = 0.5f;
+
+        // config_json からパラメータを読む
+        // 形式: {"merge_rate":0.3}
+        if (config_json && config_json[0] != '\0') {
+            const char * key = "\"merge_rate\":";
+            auto pos = std::strstr(config_json, key);
+            if (!pos) {
+                key = "\"merge_rate\" :";
+                pos = std::strstr(config_json, key);
+            }
+            if (pos) {
+                pos += std::strlen(key);
+                while (*pos == ' ') ++pos;
+                merge_rate = std::strtof(pos, nullptr);
+                // [0.0, 1.0] にクランプ
+                if (merge_rate < 0.0f) merge_rate = 0.0f;
+                if (merge_rate > 1.0f) merge_rate = 1.0f;
+            }
+        }
+
+        return ikv_pipeline_ptr(new kvp_pipeline_kvtc(merge_rate));
     }
 };
 

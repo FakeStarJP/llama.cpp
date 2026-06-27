@@ -1306,7 +1306,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                     __func__, params.kv_selection_plugin.c_str(), rc);
         }
     } else if (!params.kv_selection.empty()) {
-        int rc = llama_kv_pipeline_apply(lctx, params.kv_selection.c_str(), nullptr);
+        const char * config = params.kv_selection_config.empty() ? nullptr : params.kv_selection_config.c_str();
+        int rc = llama_kv_pipeline_apply(lctx, params.kv_selection.c_str(), config);
         if (rc != 0) {
             LOG_WRN("%s: failed to apply KV selection '%s' (rc=%d)\n",
                     __func__, params.kv_selection.c_str(), rc);
@@ -1320,7 +1321,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
                     __func__, params.kv_compression_plugin.c_str(), rc);
         }
     } else if (!params.kv_compression.empty()) {
-        int rc = llama_kv_pipeline_apply(lctx, params.kv_compression.c_str(), nullptr);
+        const char * config = params.kv_compression_config.empty() ? nullptr : params.kv_compression_config.c_str();
+        int rc = llama_kv_pipeline_apply(lctx, params.kv_compression.c_str(), config);
         if (rc != 0) {
             LOG_WRN("%s: failed to apply KV compression '%s' (rc=%d)\n",
                     __func__, params.kv_compression.c_str(), rc);

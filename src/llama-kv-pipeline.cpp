@@ -96,13 +96,13 @@ void ikv_plugin_registry::register_pipeline(
 }
 
 ikv_pipeline_ptr ikv_plugin_registry::instantiate(
-        const std::string & name) const {
+        const std::string & name, const char * config_json) const {
     ensure_factories_registered();
     auto it = m_factories.find(name);
     if (it == m_factories.end()) {
         return nullptr;
     }
-    return it->second.factory->create();
+    return it->second.factory->create(config_json);
 }
 
 ikv_pipeline_ptr ikv_plugin_registry::load_dynamic(
@@ -254,11 +254,10 @@ LLAMA_API int32_t llama_kv_pipeline_apply(
         struct llama_context * ctx,
         const char * name,
         const char * config_json) {
-    (void)config_json;
     if (!ctx || !name) {
         return -1;
     }
-    auto pipeline = ikv_plugin_registry::get().instantiate(name);
+    auto pipeline = ikv_plugin_registry::get().instantiate(name, config_json);
     if (!pipeline) {
         return -2;
     }

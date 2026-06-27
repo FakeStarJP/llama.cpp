@@ -2186,6 +2186,20 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         }
     ).set_env("LLAMA_ARG_KV_COMPRESSION_PLUGIN"));
     add_opt(common_arg(
+        {"--kv-selection-config"}, "JSON",
+        "JSON config for KV selection pipeline (e.g. '{\"initial_budget\":64,\"recent_budget\":128}')",
+        [](common_params & params, const std::string & value) {
+            params.kv_selection_config = value;
+        }
+    ).set_env("LLAMA_ARG_KV_SELECTION_CONFIG"));
+    add_opt(common_arg(
+        {"--kv-compression-config"}, "JSON",
+        "JSON config for KV compression pipeline (e.g. '{\"merge_rate\":0.3}')",
+        [](common_params & params, const std::string & value) {
+            params.kv_compression_config = value;
+        }
+    ).set_env("LLAMA_ARG_KV_COMPRESSION_CONFIG"));
+    add_opt(common_arg(
         {"--hellaswag"},
         "compute HellaSwag score over random tasks from datafile supplied with -f",
         [](common_params & params) {

@@ -169,13 +169,24 @@ printf("snapkv used=%u, baseline used=%u\n",
 
 ### デフォルト値
 
-| パラメータ | デフォルト | 影響 |
-|-----------|-----------|------|
-| `initial_budget` | 128 | 先頭に保持するトークン数（常に保持） |
-| `recent_budget` | 256 | 追加で保持するトークン数（スコア上位から選択） |
-| **合計バジェット** | **384** | これ以下のプロンプトでは prune しない |
+| パラメータ | デフォルト | 影響 | CLI 指定 |
+|-----------|-----------|------|---------|
+| `initial_budget` | 128 | 先頭に保持するトークン数（常に保持） | `--kv-selection-config '{"initial_budget":64}'` |
+| `recent_budget` | 256 | 追加で保持するトークン数（スコア上位から選択） | `--kv-selection-config '{"recent_budget":128}'` |
+| **合計バジェット** | **384** | これ以下のプロンプトでは prune しない | |
 
-現在はコンパイル時固定。CLI / JSON 設定からの変更は未対応（`kvp_factory_snapkv::create()` の引数を変更してリビルドが必要）。
+### 引数例
+
+```bat
+:: デフォルト（128+256=384）
+llama-cli.exe -m model.gguf --kv-selection snapkv -ngl 99
+
+:: 小さいバジェット（64+128=192、より積極的に prune）
+llama-cli.exe -m model.gguf --kv-selection snapkv --kv-selection-config "{\"initial_budget\":64,\"recent_budget\":128}" -ngl 99
+
+:: 大きいバジェット（256+512=768、保守的に prune）
+llama-cli.exe -m model.gguf --kv-selection snapkv --kv-selection-config "{\"initial_budget\":256,\"recent_budget\":512}" -ngl 99
+```
 
 ### prune 効果
 
@@ -217,9 +228,22 @@ printf("snapkv used=%u, baseline used=%u\n",
 
 ### デフォルト値
 
-| パラメータ | デフォルト | 影響 |
-|-----------|-----------|------|
-| `merge_rate` | 0.5 | 保持トークンの 50% を隣接マージ |
+| パラメータ | デフォルト | 影響 | CLI 指定 |
+|-----------|-----------|------|---------|
+| `merge_rate` | 0.5 | 保持トークンの何割を隣接マージするか | `--kv-compression-config '{"merge_rate":0.3}'` |
+
+### 引数例
+
+```bat
+:: デフォルト（merge_rate=0.5）
+llama-cli.exe -m model.gguf --kv-compression kvtc -ngl 99
+
+:: マージ率 30%（KV 削減 ~30%）
+llama-cli.exe -m model.gguf --kv-compression kvtc --kv-compression-config "{\"merge_rate\":0.3}" -ngl 99
+
+:: マージ率 80%（KV 削減 ~80%）
+llama-cli.exe -m model.gguf --kv-compression kvtc --kv-compression-config "{\"merge_rate\":0.8}" -ngl 99
+```
 
 ### 効果
 

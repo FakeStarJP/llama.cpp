@@ -294,7 +294,9 @@ public:
 class ikv_pipeline_factory {
 public:
     virtual ~ikv_pipeline_factory() = default;
-    virtual ikv_pipeline_ptr create() = 0;
+    // config_json が非 NULL の場合、パイプラインのパラメータを JSON から読む。
+    // NULL の場合はデフォルトパラメータを使用。
+    virtual ikv_pipeline_ptr create(const char * config_json = nullptr) = 0;
 
     // Convenience: allocate a new pipeline instance on the heap and
     // wrap it in a unique_ptr. Useful for default implementations.
@@ -310,7 +312,8 @@ public:
     static ikv_pipeline_ptr create_inline() {
         return ikv_pipeline_ptr(new ikv_pipeline());
     }
-    ikv_pipeline_ptr create() override {
+    ikv_pipeline_ptr create(const char * config_json = nullptr) override {
+        (void)config_json;
         return create_inline();
     }
 };
@@ -342,7 +345,8 @@ public:
     void register_pipeline(const std::string & name, ikv_pipeline_factory * factory);
 
     // Instantiate a registered pipeline by name. Returns nullptr if unknown.
-    ikv_pipeline_ptr instantiate(const std::string & name) const;
+    // config_json が非 NULL の場合、ファクトリに渡される。
+    ikv_pipeline_ptr instantiate(const std::string & name, const char * config_json = nullptr) const;
 
     // Load a dynamic plugin from a shared object path. Returns nullptr if
     // the plugin is missing, has a mismatched ABI, or fails to initialize.

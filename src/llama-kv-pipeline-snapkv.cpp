@@ -315,9 +315,34 @@ private:
 //
 class kvp_factory_snapkv : public ikv_pipeline_factory {
 public:
-    ikv_pipeline_ptr create() override {
-        // デフォルト: 先頭 128 + 直近 256 トークンを保持（合計バジェット 384）
-        return ikv_pipeline_ptr(new kvp_pipeline_snapkv(128, 256));
+    ikv_pipeline_ptr create(const char * config_json = nullptr) override {
+        uint32_t initial_budget = 128;
+        uint32_t recent_budget = 256;
+
+        // config_json からパラメータを読む
+        // 形式: {"initial_budget":128,"recent_budget":256}
+        if (config_json && config_json[0] != '\0') {
+            // 簡易JSONパーサ（依存なし）
+            auto parse_uint = [&](const char * key) -> uint32_t {
+                std::string k(key);
+                std::string q1 = "\"" + k + "\":";
+                std::string q2 = "\"" + k + "\" :";
+                for (const auto & pattern : {q1, q2}) {
+                    auto pos = std::strstr(config_json, pattern.c_str());
+                    if (pos) {
+                        pos += pattern.size();
+                        while (*pos == ' ') ++pos;
+                        return (uint32_t)std::strtoul(pos, nullptr, 10);
+                    }
+                }
+                return UINT32_MAX;  // 見つからず
+            };
+            uint32_t v;
+            v = parse_uint("initial_budget"); if (v != UINT32_MAX) initial_budget = v;
+            v = parse_uint("recent_budget");  if (v != UINT32_MAX) recent_budget  = v;
+        }
+
+        return ikv_pipeline_ptr(new kvp_pipeline_snapkv(initial_budget, recent_budget));
     }
 };
 

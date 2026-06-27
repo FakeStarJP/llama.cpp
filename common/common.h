@@ -584,6 +584,8 @@ struct common_params {
     std::string kv_compression;           // 組み込み圧縮パイプライン名（"kvtc", 空=なし）
     std::string kv_selection_plugin;      // 動的選択プラグインパス（.dll/.so）
     std::string kv_compression_plugin;    // 動的圧縮プラグインパス（.dll/.so）
+    std::string kv_selection_config;      // 選択パイプライン JSON 設定
+    std::string kv_compression_config;    // 圧縮パイプライン JSON 設定
 
     common_conversation_mode conversation_mode = COMMON_CONVERSATION_MODE_AUTO;
 
